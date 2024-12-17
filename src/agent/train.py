@@ -6,6 +6,7 @@ Main training agent
 import logging
 import os
 import random
+from collections import deque
 
 import bitsandbytes as bnb
 import einops
@@ -38,6 +39,7 @@ class TrainAgent:
         self.num_gpus = torch.cuda.device_count()
         self.gpu_id = int(cfg.gpu_id)
         self.multi_gpu = self.num_gpus > 1
+        self.main_rank = self.gpu_id == 0
 
         # training params
         self.n_epochs = cfg.n_epochs
@@ -49,7 +51,7 @@ class TrainAgent:
         self.checkpoint_dir = os.path.join(self.logdir, "checkpoint")
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         self.use_wandb = cfg.get("wandb", None)
-        if self.use_wandb and self.gpu_id == 0:
+        if self.use_wandb and self.main_rank:
             wandb.init(
                 entity=cfg.wandb.entity,
                 project=cfg.wandb.project,
@@ -79,6 +81,7 @@ class TrainAgent:
             model = self.model
         if cfg.load_pretrained_weights:
             model.load_pretrained_weights()
+            model.freeze_embedding()
         if self.multi_gpu:
             dist.barrier()
         log_allocated_gpu_memory(log, "loading model")
@@ -92,7 +95,6 @@ class TrainAgent:
         self.tokenizer = AutoTokenizer.from_pretrained(
             cfg.pretrained_model_path, padding_side="right"
         )
-        assert self.tokenizer.padding_side == "right"
 
         # processor
         self.processor = VLAProcessor(
@@ -110,29 +112,29 @@ class TrainAgent:
         self.dataloader = DataLoader(
             dataset_wrapper.dataset,
             batch_size=cfg.per_device_batch_size,
-            num_workers=0,  # important to keep this to 0 so PyTorch does not mess with the parallelism
+            num_workers=0,  # let TFDS handle parallelism
             shuffle=False,
             pin_memory=True,
             # sampler=DistributedSampler(dataset_wrapper.dataset),
-        )
-        num_batch_per_epoch = (
-            len(dataset_wrapper.dataset) // cfg.per_device_batch_size // self.num_gpus
-        )
+        )  # full bridge dataset has 2195527 transitions and 60064 trajectories
+        num_batch_per_epoch = len(dataset_wrapper.dataset) // cfg.global_batch_size
         log.info(f"Global batch size: {cfg.global_batch_size}")
         log.info(f"Per device batch size: {cfg.per_device_batch_size}")
         log.info(f"Gradient accumulation steps: {self.grad_accumulation_steps}")
         log.info(f"Number of batches per epoch: {num_batch_per_epoch}")
 
         # optimizer
-        self.trained_parameters = (
-            # list(mode.embed_tokens.parameters())
-            list(model.vision_tower.parameters())
-            + list(model.multi_modal_projector.parameters())
-            + list(model.joint_model.parameters())
-            + list(model.action_time_encoder.parameters())
-            + list(model.proprio_encoder.parameters())
-            + list(model.action_decoder.parameters())
-        )
+        if cfg.train_action_only:  # 0.315B
+            self.trained_parameters = model.action_expert_parameters
+        else:
+            self.trained_parameters = (
+                list(model.vision_tower.parameters())
+                + list(model.multi_modal_projector.parameters())
+                + list(model.joint_model.parameters())
+                + list(model.action_time_encoder.parameters())
+                + list(model.proprio_encoder.parameters())
+                + list(model.action_decoder.parameters())
+            )
         self.optimizer = bnb.optim.AdamW8bit(
             self.trained_parameters,
             lr=cfg.learning_rate,
@@ -164,6 +166,7 @@ class TrainAgent:
         epoch = 1
         cnt_batch = 0
         cnt_update = 0
+        loss_train_deque = deque(maxlen=self.grad_accumulation_steps)
         if self.multi_gpu:
             import torch.distributed as dist
 
@@ -173,14 +176,13 @@ class TrainAgent:
                 cnt_update_in_epoch = 0
                 """
                 batch: dict with keys 'observation', 'task', 'action', 'dataset_name', 'action_pad_mask'
-                observation: 'image_primary' (torch.Size([3, 1, 256, 256, 3], uint8), 'image_wrist', 'timestep' (torch.Size([3, 1])), 'pad_mask_dict', 'timestep_pad_mask', 'task_completed' (torch.Size([3, 1, 4]), 'proprio' (torch.Size([3, 1, 7])
-                task: 'language_instruction', 'pad_mask_dict', 'image_primary', 'image_wrist', 'timestep' (torch.Size([3]))
-                action (torch.Size([3, 1, 4, 7], float32)
+                observation: 'image_primary' (torch.Size([bsz, 1, H, W, 3], uint8), 'image_wrist', 'timestep' (torch.Size([bsz, 1])), 'pad_mask_dict', 'timestep_pad_mask', 'task_completed' (torch.Size([bsz, window, 4]), 'proprio' (torch.Size([bsz, window, proprio_dim])
+                task: 'language_instruction', 'pad_mask_dict', 'image_primary', 'image_wrist', 'timestep' (torch.Size([bsz]))
+                action (torch.Size([bsz, window, horizon, action_dim], float32)
                 dataset_name
-                action_pad_mask (torch.Size([3, 1, 4, 7]))
+                action_pad_mask (torch.Size([bsz, window, horizon, action_dim]))
                 """
 
-                # extract and debug
                 with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
                     images = batch["observation"]["image_primary"]
                     proprios = batch["observation"]["proprio"]
@@ -224,8 +226,6 @@ class TrainAgent:
                         model = self.model.module
                     else:
                         model = self.model
-                    if self.debug:
-                        log_allocated_gpu_memory(log, f"pre batch {batch_ind}")
                     loss_train = model.loss(
                         pixel_values=pixel_values.to(self.device),
                         input_ids=input_ids.to(self.device),
@@ -233,6 +233,7 @@ class TrainAgent:
                         actions=actions.to(self.device),
                         attention_mask=attention_mask.to(self.device),
                     )
+                    loss_train_deque.append(loss_train.item())
                 if self.debug:
                     log_allocated_gpu_memory(log, f"forward batch {batch_ind}")
 
@@ -247,9 +248,7 @@ class TrainAgent:
                         max_norm=self.max_grad_norm,
                     )
                     self.optimizer.step()
-                    # lr schedule
-                    if self.gpu_id == 0:
-                        self.lr_scheduler.step()
+                    self.lr_scheduler.step()
                     if self.debug:
                         log_allocated_gpu_memory(
                             log, f"optimizer step batch {batch_ind}"
@@ -266,13 +265,14 @@ class TrainAgent:
                 loss_val = None
 
                 # log loss
-                if self.gpu_id == 0 and cnt_batch % self.log_freq == 0:
+                if self.main_rank and cnt_batch % self.log_freq == 0:
+                    loss_train_metric = np.mean(loss_train_deque)
                     log.info(
-                        f"Epoch {epoch} Batch {batch_ind}: train loss {loss_train:8.4f} | t:{timer():8.4f}"
+                        f"Epoch {epoch} Batch {batch_ind}: train loss {loss_train_metric:8.4f} | lr: {self.optimizer.param_groups[0]['lr']:8.6f} | t:{timer():8.4f}"
                     )
-                    if self.use_wandb and self.gpu_id == 0:
+                    if self.use_wandb:
                         wandb_metrics = {
-                            "loss - train": loss_train,
+                            "loss - train": loss_train_metric,
                             "gradient steps": cnt_update,
                             "lr": self.optimizer.param_groups[0]["lr"],
                         }
@@ -284,11 +284,11 @@ class TrainAgent:
                 cnt_batch += 1
 
                 # save model at batch level
-                if self.gpu_id == 0 and cnt_batch % self.save_model_batch_freq == 0:
+                if self.main_rank and cnt_batch % self.save_model_batch_freq == 0:
                     self.save_model(epoch)
 
             # Save model at epoch level --- always save at the end
-            if self.gpu_id == 0 and (
+            if self.main_rank and (
                 epoch % self.save_model_epoch_freq == 0 or epoch == self.n_epochs
             ):
                 self.save_model(epoch)

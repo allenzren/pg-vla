@@ -44,7 +44,7 @@ class VLA(nn.Module):
         self.gamma_alpha = cfg.get("flow_gamma_alpha", 1.5)
         self.gamma_beta = cfg.get("flow_gamma_beta", 1)
         self.gamma_max = 1 - self.sig_min
-        self.schedule = cfg.get("flow_schedule", "linear")
+        self.schedule = cfg.get("flow_schedule", "gamma")
         assert self.schedule in [
             "linear",
             "gamma",
@@ -55,8 +55,7 @@ class VLA(nn.Module):
             cfg.vocab_size,
             self.image_text_hidden_size,
             self.pad_token_id,
-        )
-        self.embed_tokens.weight.requires_grad = False
+        )  # 0.527B parameters
 
         # Vision
         self.vision_tower = hydra.utils.instantiate(cfg.vision)
@@ -88,6 +87,28 @@ class VLA(nn.Module):
                 self.vocab_size,
                 bias=False,
             )
+
+    @property
+    def action_expert_parameters(self):
+        action_expert_parameters = []
+        for name, param in self.joint_model.named_parameters():
+            if (
+                "q_projs.2" in name
+                or "k_projs.2" in name
+                or "v_projs.2" in name
+                or "o_projs.2" in name
+                or "mlp.2" in name
+                or "layernorms.2" in name
+                or "layernorm.2" in name
+                or "action_norm" in name
+            ):
+                action_expert_parameters.append(param)
+        return (
+            list(self.action_time_encoder.parameters())
+            + list(self.action_decoder.parameters())
+            + list(self.proprio_encoder.parameters())
+            + action_expert_parameters
+        )
 
     @log_execution_time()
     def load_pretrained_weights(self):
@@ -161,6 +182,9 @@ class VLA(nn.Module):
         self.joint_model.load_state_dict(joint_model_state_dict, strict=False)
         print("Loaded pre-trained weights for lm part of the joint model")
 
+    def freeze_embedding(self):
+        self.embed_tokens.weight.requires_grad = False
+
     def tie_weights(self):
         self.lm_head.weight = self.embed_tokens.weight
 
@@ -173,7 +197,7 @@ class VLA(nn.Module):
         # shape: (Batch_Size, Seq_Len, Hidden_Size)
         inputs_embeds = self.embed_tokens(input_ids)
 
-        # TODO: cache this
+        # TODO: cache this in action inference
         # Extract image features from siglip and projector
         # [Batch_Size, Channels, Height, Width] -> [Batch_Size, Num_Patches, Embed_Dim]
         selected_image_feature = self.vision_tower(pixel_values.to(inputs_embeds.dtype))
@@ -226,6 +250,9 @@ class VLA(nn.Module):
         total_len = (
             max_num_image_text_tokens + self.num_proprio_tokens + self.num_action_tokens
         )
+        proprio_start = max_num_image_text_tokens
+        proprio_end = max_num_image_text_tokens + self.num_proprio_tokens
+        action_start = proprio_end
 
         # block attention
         causal_mask = torch.full(
@@ -234,18 +261,18 @@ class VLA(nn.Module):
             dtype=torch.float32,
             device=device,
         )  # smallest value, avoid using inf for softmax nan issues with padding
-
-        # image/text attend to itself
         for idx, num in enumerate(num_image_text_tokens):
-            causal_mask[idx, :num, :num] = 0
-
-        proprio_start = max_num_image_text_tokens
-        proprio_end = max_num_image_text_tokens + self.num_proprio_tokens
+            causal_mask[idx, :num, :num] = 0  # image/text attend to itself
+            causal_mask[
+                idx, proprio_start:proprio_end, :num
+            ] = 0  # proprio attend to image/text
+            causal_mask[idx, action_start:, :num] = 0  # action attend to image/text
         causal_mask[
-            :, proprio_start:proprio_end, :proprio_end
-        ] = 0  # proprio attend to itself and image/text
-        action_start = proprio_end
-        causal_mask[:, action_start:, :] = 0  # action attend to itself and all
+            :, proprio_start:proprio_end, proprio_start:proprio_end
+        ] = 0  # proprio attend to itself
+        causal_mask[
+            :, action_start:, proprio_start:
+        ] = 0  # action attend to itself and proprio
 
         # Add the head dimension
         # [Batch_Size, Q_Len, KV_Len] -> [Batch_Size, Num_Heads_Q, Q_Len, KV_Len]
@@ -584,7 +611,7 @@ if __name__ == "__main__":
     elif args.loss_only:
         dummy_actions = torch.randn(bsz, config.horizon_steps, config.action_dim).to(
             device
-        )  # TODO: training data is normalized within some range?
+        )
         loss = model.loss(
             pixel_values=pixel_values,
             input_ids=input_ids,
