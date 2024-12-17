@@ -636,14 +636,14 @@ if __name__ == "__main__":
         torch.finfo(torch.float32).min,
         dtype=torch.float32,
     )  # smallest value
-    causal_mask[
-        :dummy_num_image_tokens, :dummy_num_image_tokens
-    ] = 0  # image/text attend to itself
+    causal_mask[:dummy_num_image_tokens, :dummy_num_image_tokens] = (
+        0  # image/text attend to itself
+    )
     proprio_start = dummy_num_image_tokens
     proprio_end = dummy_num_image_tokens + cfg.cond_steps
-    causal_mask[
-        proprio_start:proprio_end, :proprio_end
-    ] = 0  # proprio attend to itself and image/text
+    causal_mask[proprio_start:proprio_end, :proprio_end] = (
+        0  # proprio attend to itself and image/text
+    )
     action_start = proprio_end
     causal_mask[action_start:, :] = 0  # action attend to itself and all
 

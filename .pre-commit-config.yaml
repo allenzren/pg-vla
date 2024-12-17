@@ -2,7 +2,7 @@ exclude: ".git"
 
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.2.2
+    rev: v0.8.3
     hooks:
       - id: ruff-format # formatter
         types_or: [python, pyi, jupyter, toml]

@@ -263,16 +263,16 @@ class VLA(nn.Module):
         )  # smallest value, avoid using inf for softmax nan issues with padding
         for idx, num in enumerate(num_image_text_tokens):
             causal_mask[idx, :num, :num] = 0  # image/text attend to itself
-            causal_mask[
-                idx, proprio_start:proprio_end, :num
-            ] = 0  # proprio attend to image/text
+            causal_mask[idx, proprio_start:proprio_end, :num] = (
+                0  # proprio attend to image/text
+            )
             causal_mask[idx, action_start:, :num] = 0  # action attend to image/text
-        causal_mask[
-            :, proprio_start:proprio_end, proprio_start:proprio_end
-        ] = 0  # proprio attend to itself
-        causal_mask[
-            :, action_start:, proprio_start:
-        ] = 0  # action attend to itself and proprio
+        causal_mask[:, proprio_start:proprio_end, proprio_start:proprio_end] = (
+            0  # proprio attend to itself
+        )
+        causal_mask[:, action_start:, proprio_start:] = (
+            0  # action attend to itself and proprio
+        )
 
         # Add the head dimension
         # [Batch_Size, Q_Len, KV_Len] -> [Batch_Size, Num_Heads_Q, Q_Len, KV_Len]
