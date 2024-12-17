@@ -12,11 +12,27 @@ from src.model.paligemma.utils import (
     repeat_kv,
 )
 
+# from torch.nn.attention.flex_attention import flex_attention
+# flex_attention = torch.compile(flex_attention, mode="max-autotune")
+# # introduced in gemma
+# def softclamp_score_mod(value):
+#     def identity(score, b, h, q, k):
+#         return score
+
+#     def softclamped(score, b, h, q, k):
+#         score = score / value
+#         score = torch.tanh(score)
+#         score = score * value
+#         return score
+
+#     return softclamped if value > 0.0 else identity
+
 
 class JointModel(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
+        self.num_hidden_layers = config.num_hidden_layers
         (
             self.image_text_hidden_size,
             self.proprio_hidden_size,
@@ -227,12 +243,18 @@ class JointDecoderLayer(nn.Module):
 class JointAttention(nn.Module):
     """assume head_dim same for all blocks"""
 
-    def __init__(self, config, layer_idx: Optional[int] = None):
+    def __init__(
+        self,
+        config,
+        layer_idx: Optional[int] = None,
+        attn_softclamp: float = 50.0,
+    ):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
         self.hidden_sizes = config.hidden_sizes
 
+        self.attn_softclamp = attn_softclamp
         self.attention_dropout = config.attention_dropout
         self.num_heads = config.num_attention_heads
         self.head_dim = config.head_dim
@@ -392,10 +414,13 @@ class JointAttention(nn.Module):
             query_states, key_states.transpose(2, 3)
         ) / math.sqrt(self.head_dim)
 
-        assert attention_mask is not None
-        attn_weights = attn_weights + attention_mask
+        # Soft capping
+        attn_weights = attn_weights / self.attn_softclamp
+        attn_weights = torch.tanh(attn_weights)
+        attn_weights = attn_weights * self.attn_softclamp
 
         # Apply the softmax
+        attn_weights = attn_weights + attention_mask
         # [Batch_Size, Num_Heads_Q, Full_Seq_Len, Full_Seq_Len]
         attn_weights = nn.functional.softmax(
             attn_weights, dim=-1, dtype=torch.float32
@@ -473,23 +498,28 @@ class JointAttention(nn.Module):
         # Repeat the key and values to match the number of heads of the query
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
-        # Perform the calculation as usual, Q * K^T / sqrt(head_dim). Shape: [Batch_Size, Num_Heads_Q, Seq_Len_Q, Seq_Len_KV]
-        attn_weights = torch.matmul(
-            query_states, key_states.transpose(2, 3)
-        ) / math.sqrt(self.head_dim)
 
-        assert attention_mask is not None
-        attn_weights = attn_weights + attention_mask
+        # # Flex attention --- https://github.com/pytorch/pytorch/issues/133254#issuecomment-2408710459
+        # score_mod_fn = softclamp_score_mod(self.attn_softclamp)
+        # causal_attention = partial(
+        #     flex_attention,
+        #     # block_mask=attention_mask,  # not set up yet
+        #     score_mod=score_mod_fn,
+        # )
+        # attn_output = causal_attention(query_states, key_states, value_states)
 
         # Perform the calculation as usual, Q * K^T / sqrt(head_dim). Shape: [Batch_Size, Num_Heads_Q, Full_Seq_Len, Full_Seq_Len]
         attn_weights = torch.matmul(
             query_states, key_states.transpose(2, 3)
         ) / math.sqrt(self.head_dim)
 
-        assert attention_mask is not None
-        attn_weights = attn_weights + attention_mask
+        # Soft capping
+        attn_weights = attn_weights / self.attn_softclamp
+        attn_weights = torch.tanh(attn_weights)
+        attn_weights = attn_weights * self.attn_softclamp
 
-        # Apply the softmax
+        # Apply the softmax with masking
+        attn_weights = attn_weights + attention_mask
         # [Batch_Size, Num_Heads_Q, Seq_Len_Q, Seq_Len_KV]
         attn_weights = nn.functional.softmax(
             attn_weights, dim=-1, dtype=torch.float32
