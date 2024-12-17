@@ -68,11 +68,13 @@ class VLAProcessor:
         tokenizer,
         num_image_tokens: int,
         max_seq_len: int,
+        tokenizer_padding: str = "longest",
     ):
         super().__init__()
 
         self.image_seq_length = num_image_tokens
         self.max_seq_len = max_seq_len
+        self.tokenizer_padding = tokenizer_padding
 
         # Tokenizer described here: https://github.com/google-research/big_vision/blob/main/big_vision/configs/proj/paligemma/README.md#tokenizer
         tokens_to_add = {"additional_special_tokens": [self.IMAGE_TOKEN]}
@@ -95,12 +97,14 @@ class VLAProcessor:
         self,
         text: List[str],
         images: torch.LongTensor,
-        padding: str = "longest",
         truncation: bool = True,
     ) -> dict:
         assert len(images) == len(
             text
         ), f"Received {len(images)} images for {len(text)} prompts."
+        assert (
+            images.dtype == torch.uint8
+        ), f"Expected uint8 tensor for images, got {images.dtype}."
 
         pixel_values = process_images(
             images,
@@ -125,7 +129,7 @@ class VLAProcessor:
             input_strings,
             return_tensors="pt",
             max_length=self.max_seq_len,
-            padding=padding,
+            padding=self.tokenizer_padding,
             truncation=truncation,
         )
 

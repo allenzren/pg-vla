@@ -11,34 +11,38 @@ device: cuda
 seed: 42
 pretrained_model_path: /n/fs/llm-unc/.cache/paligemma-3b-pt-224
 load_pretrained_weights: True
+train_action_only: False
 debug: False
 
 data:
   dataset_mix: bridge
+  split: train[:2%]
   data_path: /n/fs/llm-unc/data/resize_224
   window_size: ${cond_steps}
   action_horizon: ${horizon_steps}
   skip_unlabeled: True
   load_proprio: True
-  shuffle_buffer_size: 500000
-  num_parallel_calls: 200
-  traj_transform_threads: 48
-  traj_read_threads: 48
+  shuffle_buffer_size: 50000
+  num_parallel_calls: 100
+  traj_transform_threads: 10
+  traj_read_threads: 10
 
 wandb:
   entity: ${oc.env:VLA_WANDB_ENTITY}
   project: train-vla
   run: ${now:%H-%M-%S}_${name}
 
-n_epochs: 3
-log_freq: 100
+n_epochs: 10
+log_freq: 8
 save_model_batch_freq: 10000000
 save_model_epoch_freq: 1
-learning_rate: 2e-5
+global_batch_size: 1024
+per_device_batch_size: 8
+learning_rate: 5e-5
 lr_scheduler:
-  first_cycle_steps: ${n_epochs}
-  min_lr: ${learning_rate}
-  warmup_steps: 0
+  first_cycle_steps: 10000000
+  min_lr: 1e-8
+  warmup_steps: 200
 weight_decay: 0
 max_grad_norm: 1.0
 
@@ -51,10 +55,10 @@ action_dim: 7 # EEF_POS
 proprio_dim: 7  # POS_EULER
 
 image_token_index: 257152
-ignore_index: -100
 vocab_size: 257216
 pad_token_id: 0
-max_seq_len: 512  # image + text
+max_seq_len: 276
+tokenizer_padding: max_length
 
 image_text_hidden_size: 2048  # gemma
 proprio_hidden_size: 512

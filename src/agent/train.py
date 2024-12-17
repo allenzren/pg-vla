@@ -95,8 +95,12 @@ class TrainAgent:
         assert self.tokenizer.padding_side == "right"
 
         # processor
-        num_image_tokens = cfg.vision.config.num_image_tokens
-        self.processor = VLAProcessor(self.tokenizer, num_image_tokens, cfg.max_seq_len)
+        self.processor = VLAProcessor(
+            self.tokenizer,
+            num_image_tokens=cfg.vision.config.num_image_tokens,
+            max_seq_len=cfg.max_seq_len,
+            tokenizer_padding=cfg.tokenizer_padding,
+        )
 
         # dataloader --- use the same for all ranks
         dataset_wrapper = TorchRLDSInterleavedDataset(
