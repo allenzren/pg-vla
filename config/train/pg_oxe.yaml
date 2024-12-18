@@ -33,7 +33,7 @@ wandb:
   run: ${now:%H-%M-%S}_${name}
 
 n_epochs: 10
-log_freq: 8
+log_freq: 16
 save_model_batch_freq: 10000000
 save_model_epoch_freq: 1
 global_batch_size: 1024

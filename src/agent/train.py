@@ -69,7 +69,13 @@ class TrainAgent:
             from torch.nn.parallel import DistributedDataParallel as DDP
 
             self.model = self.model.to(self.gpu_id).to(torch.bfloat16)
-            self.model = DDP(self.model, device_ids=[self.gpu_id])
+            self.model = DDP(
+                self.model,
+                device_ids=[self.gpu_id],
+                # find_unused_parameters=True,
+                gradient_as_bucket_view=True,
+                # static_graph=True,
+            )
             self.device = torch.device(f"cuda:{self.gpu_id}")
             dist.barrier()
         else:
@@ -182,67 +188,79 @@ class TrainAgent:
                 dataset_name
                 action_pad_mask (torch.Size([bsz, window, horizon, action_dim]))
                 """
-
-                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
-                    images = batch["observation"]["image_primary"]
-                    proprios = batch["observation"]["proprio"]
-                    actions = batch["action"].squeeze(1)  # remove the time dimension
-                    texts = [
-                        text.decode("utf-8")
-                        for text in batch["task"]["language_instruction"]
-                    ]
-                    if self.debug and batch_ind == 0:
-                        log.info(f"{self.gpu_id} device {self.device}")
-                        log.info(f"{self.gpu_id} texts {texts}")
-                        log.info(f"{self.gpu_id} images {images.shape}")
-                        log.info(
-                            f"{self.gpu_id} actions {actions.shape} {actions.mean()} {actions.std()} {actions.max()} {actions.min()}"
-                        )
-                        log.info(
-                            f"{self.gpu_id} proprios {proprios.shape} {proprios.mean()} {proprios.std()} {proprios.max()} {proprios.min()}"
-                        )
-
-                        # Save an image for debugging
-                        image = images[0, 0].clone().to("cpu")
-                        image = Image.fromarray(image.numpy())
-                        image.save(
-                            os.path.join(self.logdir, f"image_{self.gpu_id}.png")
-                        )
-
-                    # process image and text
-                    images = einops.rearrange(
-                        images, "B T H W C -> B (T C) H W"
-                    )  # remove cond_steps dimension
-                    model_inputs = self.processor(text=texts, images=images)
-                    pixel_values = model_inputs["pixel_values"]
-                    input_ids = model_inputs["input_ids"]
-                    attention_mask = model_inputs[
-                        "attention_mask"
-                    ]  # with padding if bsz > 1
-
-                    # forward
-                    self.model.train()
-                    if self.multi_gpu:
-                        model = self.model.module
-                    else:
-                        model = self.model
-                    loss_train = model.loss(
-                        pixel_values=pixel_values.to(self.device),
-                        input_ids=input_ids.to(self.device),
-                        proprios=proprios.to(self.device),
-                        actions=actions.to(self.device),
-                        attention_mask=attention_mask.to(self.device),
+                images = batch["observation"]["image_primary"]
+                proprios = batch["observation"]["proprio"]
+                actions = batch["action"].squeeze(1)  # remove the time dimension
+                texts = [
+                    text.decode("utf-8")
+                    for text in batch["task"]["language_instruction"]
+                ]
+                if self.debug and batch_ind == 0:
+                    log.info(f"{self.gpu_id} device {self.device}")
+                    log.info(f"{self.gpu_id} texts {texts}")
+                    log.info(f"{self.gpu_id} images {images.shape}")
+                    log.info(
+                        f"{self.gpu_id} actions {actions.shape} {actions.mean()} {actions.std()} {actions.max()} {actions.min()}"
                     )
-                    loss_train_deque.append(loss_train.item())
-                if self.debug:
-                    log_allocated_gpu_memory(log, f"forward batch {batch_ind}")
+                    log.info(
+                        f"{self.gpu_id} proprios {proprios.shape} {proprios.mean()} {proprios.std()} {proprios.max()} {proprios.min()}"
+                    )
 
-                # update
-                normalized_loss = loss_train / self.grad_accumulation_steps
-                normalized_loss.backward()
-                if self.debug:
-                    log_allocated_gpu_memory(log, f"backward batch {batch_ind}")
-                if (cnt_batch + 1) % self.grad_accumulation_steps == 0:
+                    # Save an image for debugging
+                    image = images[0, 0].clone().to("cpu")
+                    image = Image.fromarray(image.numpy())
+                    image.save(os.path.join(self.logdir, f"image_{self.gpu_id}.png"))
+
+                # process image and text
+                images = einops.rearrange(
+                    images, "B T H W C -> B (T C) H W"
+                )  # remove cond_steps dimension
+                model_inputs = self.processor(text=texts, images=images)
+                pixel_values = model_inputs["pixel_values"]
+                input_ids = model_inputs["input_ids"]
+                attention_mask = model_inputs[
+                    "attention_mask"
+                ]  # with padding if bsz > 1
+                self.model.train()
+
+                # make sure only syncing when taking gradient steps
+                if (cnt_batch + 1) % self.grad_accumulation_steps != 0:
+                    with self.model.no_sync():
+                        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
+                            loss_train = self.model(
+                                pixel_values=pixel_values.to(self.device),
+                                input_ids=input_ids.to(self.device),
+                                proprios=proprios.to(self.device),
+                                actions=actions.to(self.device),
+                                attention_mask=attention_mask.to(self.device),
+                            )
+                            loss_train_deque.append(loss_train.item())
+                        if self.debug:
+                            log_allocated_gpu_memory(log, f"forward batch {batch_ind}")
+                        # update -- outside autocast
+                        normalized_loss = loss_train / self.grad_accumulation_steps
+                        normalized_loss.backward()
+                        if self.debug:
+                            log_allocated_gpu_memory(log, f"backward batch {batch_ind}")
+                else:
+                    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
+                        loss_train = self.model(
+                            pixel_values=pixel_values.to(self.device),
+                            input_ids=input_ids.to(self.device),
+                            proprios=proprios.to(self.device),
+                            actions=actions.to(self.device),
+                            attention_mask=attention_mask.to(self.device),
+                        )
+                        loss_train_deque.append(loss_train.item())
+                    if self.debug:
+                        log_allocated_gpu_memory(log, f"forward batch {batch_ind}")
+                    # update -- outside autocast
+                    normalized_loss = loss_train / self.grad_accumulation_steps
+                    normalized_loss.backward()  # now gradients are synced across gpus
+                    if self.debug:
+                        log_allocated_gpu_memory(log, f"backward batch {batch_ind}")
+
+                    # step
                     torch.nn.utils.clip_grad_norm_(
                         self.trained_parameters,
                         max_norm=self.max_grad_norm,
