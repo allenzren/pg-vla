@@ -133,6 +133,7 @@ class JointModel(nn.Module):
 class JointDecoderLayer(nn.Module):
     def __init__(self, config, layer_idx: int):
         super().__init__()
+        self.final_layer = layer_idx == config.num_hidden_layers - 1
         self.self_attn = JointAttention(config=config, layer_idx=layer_idx)
 
         self.mlp = nn.ModuleList()
@@ -180,27 +181,45 @@ class JointDecoderLayer(nn.Module):
         )
         # [Batch_Size, Seq_Len, Hidden_Size]
         hidden_states_pre_res = []
-        for residual, hidden_states in zip(residuals, hidden_states_all, strict=False):
-            hidden_states_pre_res.append(residual + hidden_states)
+        for block_index, (residual, hidden_states) in enumerate(
+            zip(residuals, hidden_states_all, strict=False)
+        ):
+            if self.final_layer and block_index != 2:
+                hidden_states_pre_res.append(None)
+            else:
+                hidden_states_pre_res.append(residual + hidden_states)
 
         # [Batch_Size, Seq_Len, Hidden_Size]
         residuals = hidden_states_pre_res
         # [Batch_Size, Seq_Len, Hidden_Size]
         hidden_states_post = []
-        for hidden_states, layernorm in zip(
-            hidden_states_pre_res, self.post_attention_layernorms, strict=False
+        for block_index, (hidden_states, layernorm) in enumerate(
+            zip(hidden_states_pre_res, self.post_attention_layernorms, strict=False)
         ):
-            hidden_states_post.append(layernorm(hidden_states))
+            if self.final_layer and block_index != 2:
+                hidden_states_post.append(None)
+            else:
+                hidden_states_post.append(layernorm(hidden_states))
 
         # [Batch_Size, Seq_Len, Hidden_Size]
         hidden_states_mlp = []
-        for hidden_states, mlp in zip(hidden_states_post, self.mlp, strict=False):
-            hidden_states_mlp.append(mlp(hidden_states))
+        for block_index, (hidden_states, mlp) in enumerate(
+            zip(hidden_states_post, self.mlp, strict=False)
+        ):
+            if self.final_layer and block_index != 2:
+                hidden_states_mlp.append(None)
+            else:
+                hidden_states_mlp.append(mlp(hidden_states))
 
         # [Batch_Size, Seq_Len, Hidden_Size]
         hidden_states_final = []
-        for residual, hidden_states in zip(residuals, hidden_states_mlp, strict=False):
-            hidden_states_final.append(residual + hidden_states)
+        for block_index, (residual, hidden_states) in enumerate(
+            zip(residuals, hidden_states_mlp, strict=False)
+        ):
+            if self.final_layer and block_index != 2:
+                hidden_states_final.append(None)
+            else:
+                hidden_states_final.append(residual + hidden_states)
 
         return tuple(hidden_states_final)
 
@@ -252,6 +271,7 @@ class JointAttention(nn.Module):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
+        self.final_layer = layer_idx == config.num_hidden_layers - 1
         self.hidden_sizes = config.hidden_sizes
 
         self.attn_softclamp = attn_softclamp
@@ -448,7 +468,10 @@ class JointAttention(nn.Module):
         # Multiply by W_o. [Batch_Size, Seq_Len_Q, Hidden_Size]
         attn_outputs_final = []
         for block_idx in range(num_blocks):
-            attn_output = self.o_projs[block_idx](attn_outputs[block_idx])
+            if self.final_layer and block_idx != 2:
+                attn_output = None
+            else:
+                attn_output = self.o_projs[block_idx](attn_outputs[block_idx])
             attn_outputs_final.append(attn_output)
 
         return tuple(attn_outputs_final)
