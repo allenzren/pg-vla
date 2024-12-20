@@ -458,6 +458,7 @@ class VLA(nn.Module, NoSyncBase):
         pixel_values: torch.FloatTensor,
         attention_mask: torch.Tensor,
         kv_cache: Optional[KVCache] = None,
+        use_joint_model: Optional[bool] = False,
     ) -> Tuple:
         # Merge the text tokens and the image tokens
         inputs_embeds = self._merge_input_ids_with_pixel_values(input_ids, pixel_values)
@@ -471,7 +472,11 @@ class VLA(nn.Module, NoSyncBase):
             q_len, attention_mask, kv_cache
         )
 
-        hidden_states = self.joint_model.forward_text_only(
+        if use_joint_model:
+            func = self.joint_model.forward
+        else:
+            func = self.joint_model.forward_text_only
+        hidden_states = func(
             attention_mask=attention_mask,
             position_ids=position_ids,
             inputs_embeds=inputs_embeds,
@@ -579,6 +584,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--text_only", action="store_true")
+    parser.add_argument("--text_from_joint_model", action="store_true")
     parser.add_argument("--load_pretrained_weights", action="store_true")
     parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--loss_only", action="store_true")
@@ -652,6 +658,7 @@ if __name__ == "__main__":
                 pixel_values=pixel_values,
                 attention_mask=attention_mask,
                 kv_cache=kv_cache,
+                use_joint_model=args.text_from_joint_model,
             )
             next_token_logits = outputs["logits"][:, -1, :]
             next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)

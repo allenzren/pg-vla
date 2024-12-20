@@ -193,12 +193,12 @@ class JointModel(nn.Module):
             )
 
         # [Batch_Size, Seq_Len, Hidden_Size]
-        if isinstance(self.action_norm, AdaptiveRMSNorm):
-            action_hidden_states = self.action_norm(action_hidden_states, time_embeds)
-        else:
-            action_hidden_states = self.action_norm(action_hidden_states)
-
-        return action_hidden_states
+        # if isinstance(self.action_norm, AdaptiveRMSNorm):
+        #     action_hidden_states = self.action_norm(action_hidden_states, time_embeds)
+        # else:
+        #     action_hidden_states = self.action_norm(action_hidden_states)
+        hidden_states = self.norm(hidden_states)
+        return hidden_states
 
     def forward_text_only(
         self,
@@ -312,9 +312,9 @@ class JointDecoderLayer(nn.Module):
         for block_index, (residual, hidden_states) in enumerate(
             zip(residuals, hidden_states_all, strict=False)
         ):
-            if self.final_layer and block_index != 2:
-                hidden_states_pre_res.append(None)
-            elif hasattr(self, "post_adaptive_scale") and block_index == 2:
+            # if self.final_layer and block_index != 2:
+            #     hidden_states_pre_res.append(None)
+            if hasattr(self, "post_adaptive_scale") and block_index == 2:
                 hidden_states_pre_res.append(
                     residual + self.post_adaptive_scale(hidden_states, time_embeds)
                 )
@@ -325,34 +325,34 @@ class JointDecoderLayer(nn.Module):
         residuals = hidden_states_pre_res
         # [Batch_Size, Seq_Len, Hidden_Size]
         hidden_states_post = []
-        for block_index, (hidden_states, layernorm) in enumerate(
+        for _, (hidden_states, layernorm) in enumerate(
             zip(hidden_states_pre_res, self.post_attention_layernorms, strict=False)
         ):
-            if self.final_layer and block_index != 2:
-                hidden_states_post.append(None)
-            elif isinstance(layernorm, AdaptiveRMSNorm):
+            # if self.final_layer and block_index != 2:
+            #     hidden_states_post.append(None)
+            if isinstance(layernorm, AdaptiveRMSNorm):
                 hidden_states_post.append(layernorm(hidden_states, time_embeds))
             else:
                 hidden_states_post.append(layernorm(hidden_states))
 
         # [Batch_Size, Seq_Len, Hidden_Size]
         hidden_states_mlp = []
-        for block_index, (hidden_states, mlp) in enumerate(
+        for _, (hidden_states, mlp) in enumerate(
             zip(hidden_states_post, self.mlp, strict=False)
         ):
-            if self.final_layer and block_index != 2:
-                hidden_states_mlp.append(None)
-            else:
-                hidden_states_mlp.append(mlp(hidden_states))
+            # if self.final_layer and block_index != 2:
+            #     hidden_states_mlp.append(None)
+            # else:
+            hidden_states_mlp.append(mlp(hidden_states))
 
         # [Batch_Size, Seq_Len, Hidden_Size]
         hidden_states_final = []
         for block_index, (residual, hidden_states) in enumerate(
             zip(residuals, hidden_states_mlp, strict=False)
         ):
-            if self.final_layer and block_index != 2:
-                hidden_states_final.append(None)
-            elif hasattr(self, "final_adaptive_scale") and block_index == 2:
+            # if self.final_layer and block_index != 2:
+            #     hidden_states_final.append(None)
+            if hasattr(self, "final_adaptive_scale") and block_index == 2:
                 hidden_states_final.append(
                     residual + self.final_adaptive_scale(hidden_states, time_embeds)
                 )
@@ -611,10 +611,10 @@ class JointAttention(nn.Module):
         # Multiply by W_o. [Batch_Size, Seq_Len_Q, Hidden_Size]
         attn_outputs_final = []
         for block_idx in range(num_blocks):
-            if self.final_layer and block_idx != 2:
-                attn_output = None
-            else:
-                attn_output = self.o_projs[block_idx](attn_outputs[block_idx])
+            # if self.final_layer and block_idx != 2:
+            #     attn_output = None
+            # else:
+            attn_output = self.o_projs[block_idx](attn_outputs[block_idx])
             attn_outputs_final.append(attn_output)
 
         return tuple(attn_outputs_final)
