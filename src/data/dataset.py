@@ -457,10 +457,12 @@ def make_dataset_from_rlds(
     if ignore_errors:
         dataset = dataset.ignore_errors()
 
+    # organize data in dataset
     dataset = dataset.traj_map(restructure, num_parallel_calls).filter(
         is_nonzero_length
     )
 
+    # normalization
     if not skip_norm:
         dataset = dataset.traj_map(
             partial(
@@ -524,6 +526,7 @@ def make_interleaved_dataset(
         )
 
     # go through datasets once to get stats --- here the length is using the full split
+    # TODO: pass in filter functions into make_dataset_from_rlds so the actual number of transitions in dataset_statistics are correct
     dataset_sizes = []
     all_dataset_statistics = {}
     for dataset_kwargs in dataset_kwargs_list:
@@ -589,7 +592,7 @@ def make_interleaved_dataset(
         dataset = dataset.batch(batch_size)
 
     # this seems to reduce memory usage without affecting speed
-    dataset = dataset.with_ram_budget(1)
+    dataset = dataset.with_ram_budget(gb=1)
 
     dataset = dataset.ignore_errors(log_warning=True)
 

@@ -26,7 +26,7 @@ class TorchRLDSInterleavedDataset:
             batch_size=None,  # batching will be handles in PyTorch Dataloader object
             balance_weights=True,
             traj_transform_kwargs=dict(
-                goal_relabeling_strategy="uniform",
+                # goal_relabeling_strategy="uniform",   # no neeed for goal relabeling
                 window_size=config.window_size,
                 action_horizon=config.action_horizon,
                 subsample_length=100,

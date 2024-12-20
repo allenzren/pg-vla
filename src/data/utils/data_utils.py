@@ -263,7 +263,7 @@ def normalize_action_and_proprio(
         for key, traj_key in keys_to_normalize.items():
             mask = metadata[key].get(
                 "mask", tf.ones_like(metadata[key]["mean"], dtype=tf.bool)
-            )
+            )   # use mask so that not normalizing gripper positions
             traj = dl.transforms.selective_tree_map(
                 traj,
                 match=lambda k, _: k == traj_key,

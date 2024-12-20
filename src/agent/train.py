@@ -253,7 +253,9 @@ class TrainAgent:
             images = einops.rearrange(
                 images, "B T H W C -> B (T C) H W"
             )  # remove cond_steps dimension
-            model_inputs = self.processor(text=texts, images=images)
+            model_inputs = self.processor(
+                text=texts, images=images
+            )  # TODO: move to dataset pre-processing
             return {
                 "pixel_values": model_inputs["pixel_values"].to(self.device),
                 "input_ids": model_inputs["input_ids"].to(self.device),

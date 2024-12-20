@@ -85,8 +85,7 @@ if __name__ == "__main__":
         shuffle_buffer_size=10000,  # change to 500k for training, large shuffle buffers are important, but adjust to your RAM
         batch_size=None,  # batching will be handles in PyTorch Dataloader object
         balance_weights=True,
-        traj_transform_kwargs=dict(
-            goal_relabeling_strategy="uniform",
+        traj_transform_kwargs=dict(  # no neeed for goal relabeling
             window_size=2,
             action_horizon=4,
             subsample_length=100,
@@ -139,8 +138,6 @@ if __name__ == "__main__":
     # convert for torch
     pytorch_dataset = TorchRLDSDataset(dataset)
     print("Dataset length (traj):", len(pytorch_dataset))
-    num_transition = dataset.reduce(0, lambda x, _: x + 1).numpy()  # takes a while
-    print("Dataset length (transition):", num_transition)
     dataloader = DataLoader(
         pytorch_dataset,
         batch_size=16,
@@ -158,6 +155,11 @@ if __name__ == "__main__":
         # action (torch.Size([16, 2, 4, 7])
         # dataset_name
         # action_pad_mask (torch.Size([16, 2, 4, 7]))
+
+        # timestep_pad_mask: which observations at the beginning of the trajectory are padding --- repeat the first observation at the beginning of the trajectory rather than going out of bounds
+        # action_pad_mask: mark actions past the goal timestep as padding --- repeat the last action at the end of the trajectory rather than going out of bounds
+        # task_completed should correspond to action_pad_mask
+        # timestep should correspond to timestep_pad_mask (e.g., timestep [0, 0] for a datapoint indicates padding the first observation)
         images = _sample["observation"]["image_primary"]
         images = einops.rearrange(
             images, "B T H W C -> B (T C) H W"
@@ -167,6 +169,12 @@ if __name__ == "__main__":
         ]
         actions = _sample["action"]
         proprios = _sample["observation"]["proprio"]
+
+        # check padding
+        if not _sample["observation"]["timestep_pad_mask"].all():
+            print("Padding for history obs past trajectory start")
+        if not _sample["action_pad_mask"].all():
+            print("Padding for action chunks past trajectory end")
 
         # verify the normalization
         if actions.abs().max() > 1 or proprios.abs().max() > 1:
