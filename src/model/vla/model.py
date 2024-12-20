@@ -243,7 +243,6 @@ class VLA(nn.Module, NoSyncBase):
         # shape: (Batch_Size, Seq_Len, Hidden_Size)
         inputs_embeds = self.embed_tokens(input_ids)
 
-        # TODO: cache this in action inference
         # Extract image features from siglip and projector
         # [Batch_Size, Channels, Height, Width] -> [Batch_Size, Num_Patches, Embed_Dim]
         selected_image_feature = self.vision_tower(pixel_values.type_as(inputs_embeds))

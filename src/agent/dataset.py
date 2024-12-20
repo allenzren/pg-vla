@@ -20,7 +20,7 @@ class TorchRLDSInterleavedDataset:
         dataset = make_interleaved_dataset(
             dataset_kwargs_list,
             sample_weights,
-            train=train,  # TODO: remove train argument to use split only
+            train=train,
             split=config.get("split", None),
             shuffle_buffer_size=config.shuffle_buffer_size,
             batch_size=None,  # batching will be handles in PyTorch Dataloader object

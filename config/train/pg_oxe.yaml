@@ -2,11 +2,11 @@ defaults:
   - _self_
 hydra:
   run:
-    dir: ${logdir}
+    dir: ${log_dir}
 _target_: src.agent.train.TrainAgent
 
-logdir: ${oc.env:VLA_LOG_DIR}/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-name: paligemma_${data.dataset_mix}_tp${horizon_steps}
+log_dir: ${oc.env:VLA_LOG_DIR}/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
+name: paligemma_${data.train.dataset_mix}_tp${horizon_steps}
 device: cuda
 n_nodes: 1
 seed: 42
@@ -23,17 +23,21 @@ lora_dropout: 0.0
 debug: False
 
 data:
-  dataset_mix: bridge
-  split: train[:95%]
-  data_path: /n/fs/llm-unc/data/resize_224
-  window_size: ${cond_steps}
-  action_horizon: ${horizon_steps}
-  skip_unlabeled: True
-  load_proprio: True
-  shuffle_buffer_size: 100000
-  num_parallel_calls: 100
-  traj_transform_threads: 10
-  traj_read_threads: 10
+  val:
+    split:
+    shuffle_buffer_size: 5000
+  train:
+    dataset_mix: bridge
+    split: train[:95%]
+    data_path: /n/fs/llm-unc/data/resize_224
+    window_size: ${cond_steps}
+    action_horizon: ${horizon_steps}
+    skip_unlabeled: True
+    load_proprio: True
+    shuffle_buffer_size: 100000
+    num_parallel_calls: 100
+    traj_transform_threads: 10
+    traj_read_threads: 10
 
 wandb:
   entity: ${oc.env:VLA_WANDB_ENTITY}
@@ -41,11 +45,14 @@ wandb:
   run: ${now:%H-%M-%S}_${name}
 
 log_freq: 16
-n_epochs: 2
+n_epochs: 10
 n_updates: ${eval:'2195527 // ${global_batch_size} * ${n_epochs}'}
-# save_model_freq: ${eval:'2195527 // ${global_batch_size} * 1'}
-save_model_freq: 16
-global_batch_size: 128
+save_model_freq: ${eval:'2195527 // ${global_batch_size} * 1'}
+eval_freq: 2000
+eval_size: 1024
+eval_thresholds: [0.05, 0.1, 0.2]
+
+global_batch_size: 1024
 per_device_batch_size: 16
 action_lr: 5e-5
 vlm_lr: 5e-5
