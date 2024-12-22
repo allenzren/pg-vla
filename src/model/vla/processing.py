@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 import torch
 
@@ -67,7 +67,7 @@ class VLAProcessor:
         self,
         tokenizer,
         num_image_tokens: int,
-        max_seq_len: int,
+        max_seq_len: Optional[int] = None,
         tokenizer_padding: str = "longest",
     ):
         super().__init__()

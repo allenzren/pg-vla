@@ -490,6 +490,52 @@ class VLA(nn.Module, NoSyncBase):
             return_data["kv_cache"] = kv_cache
         return return_data
 
+    @torch.no_grad()
+    def infer_text_from_joint(
+        self,
+        input_ids: torch.LongTensor,
+        pixel_values: torch.FloatTensor,
+        attention_mask: torch.Tensor,
+        kv_cache: Optional[KVCache] = None,
+    ) -> Tuple:
+        # Merge the text tokens and the image tokens
+        inputs_embeds = self._merge_input_ids_with_pixel_values(input_ids, pixel_values)
+
+        # Build causal mask and position ids for text
+        (
+            attention_mask,
+            position_ids_all,
+        ) = self._build_causal_mask_and_position_ids_for_action(attention_mask)
+
+        # add dummy proprio and action
+        bsz = input_ids.size(0)
+        proprio_embeds = torch.zeros(
+            (bsz, self.num_proprio_tokens, self.proprio_hidden_size),
+            dtype=torch.float32,
+            device=input_ids.device,
+        )
+        action_embeds = torch.zeros(
+            (bsz, self.num_action_tokens, self.action_hidden_size),
+            dtype=torch.float32,
+            device=input_ids.device,
+        )
+        hidden_states = self.joint_model.forward(
+            attention_mask=attention_mask,
+            position_ids_all=position_ids_all,
+            inputs_embeds=inputs_embeds,
+            proprio_embeds=proprio_embeds,
+            action_embeds=action_embeds,
+            kv_cache=None,
+        )
+
+        logits = self.lm_head(hidden_states)
+        return_data = {
+            "logits": logits,
+        }
+        if kv_cache is not None:
+            return_data["kv_cache"] = kv_cache
+        return return_data
+
     # ---------- Flow matching training ----------#
 
     def psi_t(
@@ -594,6 +640,7 @@ if __name__ == "__main__":
     config = OmegaConf.load("config/train/pg_oxe.yaml")
     if args.text_only:
         config.use_lm_head = True
+        config.joint.config.use_lm_head = True
     device = "cpu" if args.cpu else "cuda"
     model = VLA(config).to(device)
     if args.load_pretrained_weights:
@@ -630,7 +677,12 @@ if __name__ == "__main__":
 
     # processor
     num_image_tokens = config.vision.config.num_image_tokens
-    processor = VLAProcessor(tokenizer, num_image_tokens, config.max_seq_len)
+    processor = VLAProcessor(
+        tokenizer,
+        num_image_tokens,
+        max_seq_len=None,
+        tokenizer_padding="longest",
+    )
 
     # process image and text
     model_inputs = processor(text=dummy_texts, images=dummy_images)
@@ -651,14 +703,16 @@ if __name__ == "__main__":
         # Generate tokens until you see the stop token
         stop_token = processor.tokenizer.eos_token_id
         generated_tokens = []
-
+        if args.text_from_joint_model:
+            func = model.infer_text_from_joint
+        else:
+            func = model.infer_text
         for _ in range(num_tokens_to_generate):
-            outputs = model.infer_text(
+            outputs = func(
                 input_ids=input_ids,
                 pixel_values=pixel_values,
                 attention_mask=attention_mask,
                 kv_cache=kv_cache,
-                use_joint_model=args.text_from_joint_model,
             )
             next_token_logits = outputs["logits"][:, -1, :]
             next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
@@ -668,13 +722,24 @@ if __name__ == "__main__":
             # Stop if the stop token has been generated
             if next_token.item() == stop_token:
                 break
-            # Append the next token to the input --- use cache so only the new token
-            input_ids = next_token.unsqueeze(-1)
+
+            if args.text_from_joint_model:
+                input_ids = torch.cat((input_ids, next_token.unsqueeze(0)), dim=-1)
+            else:
+                # use cache
+                input_ids = next_token.unsqueeze(-1)
             attention_mask = torch.cat(
-                [attention_mask, torch.ones((1, 1), device=input_ids.device)], dim=-1
+                [
+                    attention_mask,
+                    torch.ones(
+                        (1, 1),
+                        dtype=attention_mask.dtype,
+                        device=attention_mask.device,
+                    ),
+                ],
+                dim=-1,
             )
         generated_tokens = torch.cat(generated_tokens, dim=-1)
-        # Decode the generated tokens
         decoded = processor.tokenizer.decode(generated_tokens, skip_special_tokens=True)
         print("Prompt:", dummy_texts[0])
         print("Generated text:", decoded)

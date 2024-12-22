@@ -9,6 +9,11 @@ VLA with real img/text, and output text
 uv run src/model/vla/model.py --text_only --load_pretrained_weights
 ```
 
+VLA with real img/text, and output text while also performing cross attention between blocks (should generate the same text as above but slower)
+```console
+uv run src/model/vla/model.py --text_only --text_from_joint_model --load_pretrained_weights
+```
+
 VLA with dummy img/text, proprio, and action, output flow matching action
 ```console
 uv run src/model/vla/model.py
