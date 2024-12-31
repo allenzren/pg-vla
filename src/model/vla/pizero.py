@@ -374,6 +374,7 @@ class PiZero(nn.Module, NoSyncBase):
         input_ids: torch.LongTensor,
         pixel_values: torch.FloatTensor,
     ) -> torch.FloatTensor:
+        """TODO(allenzren): adjust for multi-image input, might break tensorrt"""
         dtype, device = pixel_values.dtype, pixel_values.device
 
         # text embedding
@@ -399,14 +400,10 @@ class PiZero(nn.Module, NoSyncBase):
         text_mask = (input_ids != self.image_token_index) & (
             input_ids != self.pad_token_id
         )
-        image_mask = input_ids == self.image_token_index
+        # image_mask = input_ids == self.image_token_index
+        # assume single image
         final_embedding[text_mask] = inputs_embeds[text_mask]
-        for i in range(bsz):
-            image_indices = image_mask[i].nonzero(as_tuple=True)[0]
-            num_image_tokens = len(image_indices)
-            final_embedding[i, image_indices] = scaled_image_features[
-                i, :num_image_tokens
-            ]
+        final_embedding[:, : scaled_image_features.size(1)] = scaled_image_features
         return final_embedding
 
     def infer_action(

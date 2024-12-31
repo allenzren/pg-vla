@@ -1,4 +1,3 @@
-import os
 import random
 
 import hydra
@@ -22,17 +21,14 @@ def load_checkpoint(model, path):
 
 def main(args):
     # seeding
-    seed = 42
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-
-    # disable torch compile
-    os.environ["DISABLE_TORCH_COMPILE"] = "1"
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
 
     # devices
     device = torch.device(f"cuda:{args.gpu_id}")
-    # load corresponding config
+
+    # load default configs
     if "fractal" in args.checkpoint_path:
         cfg = OmegaConf.load(
             "config/eval/fractal_apple.yaml"
@@ -47,13 +43,15 @@ def main(args):
         cfg.flow_schedule = "gamma"
 
     # model
+    dtype = torch.bfloat16 if args.use_bf16 else torch.float32
     model = PiZeroInference(cfg, use_ddp=False)
     load_checkpoint(model, args.checkpoint_path)
-    # model.freeze_all_weights()
+    model.freeze_all_weights()
+    model.to(dtype)
     model.to(device)
     model.eval()
-    print(f"Using cuda device: {device}")
-    log_allocated_gpu_memory(None, "loading model")
+    print(f"Using cuda device: {device} dtype: {dtype}")
+    log_allocated_gpu_memory(None, "loading model", args.gpu_id)
 
     # simpler env
     env = simpler_env.make(args.task)
@@ -63,7 +61,12 @@ def main(args):
     env_adapter.reset()
 
     # run an episode
-    obs, reset_info = env.reset(options={"episode_id": 0})
+    episode_id = random.randint(0, 20)
+    env_reset_options = {}
+    env_reset_options["obj_init_options"] = {
+        "episode_id": episode_id,  # this determines the obj inits in bridge
+    }
+    obs, reset_info = env.reset(options=env_reset_options)
     instruction = env.get_language_instruction()
     print(
         f"Reset info: {reset_info} Instruction: {instruction} Max episode length: {env.spec.max_episode_steps}"
@@ -71,26 +74,26 @@ def main(args):
     # infer action chunk
     inputs = env_adapter.preprocess(env, obs, instruction)
     causal_mask, vlm_position_ids, proprio_position_ids, action_position_ids = (
-        model.build_causal_mask_and_position_ids(inputs["attention_mask"])
+        model.build_causal_mask_and_position_ids(inputs["attention_mask"], dtype=dtype)
     )
     image_text_proprio_mask, action_mask = model.split_full_mask_into_submasks(
         causal_mask
     )
     inputs = [
-        inputs["input_ids"].to(device),
-        inputs["pixel_values"].to(device),
-        image_text_proprio_mask.to(device),
-        action_mask.to(device),
-        vlm_position_ids.to(device),
-        proprio_position_ids.to(device),
-        action_position_ids.to(device),
-        inputs["proprios"].to(device),
+        inputs["input_ids"],
+        inputs["pixel_values"].to(dtype),
+        image_text_proprio_mask,
+        action_mask,
+        vlm_position_ids,
+        proprio_position_ids,
+        action_position_ids,
+        inputs["proprios"].to(dtype),
     ]
+    inputs = [i.to(device) for i in inputs]
     # inputs = {k: v.to(device) for k, v in inputs.items()}
     print("compiling model...")
     trt_gm = torch_tensorrt.compile(model, inputs=inputs, truncate_long_and_double=True)
-    breakpoint()
-    # torch_tensorrt.save(trt_gm, "trt.ep", inputs=inputs)
+    torch_tensorrt.save(trt_gm, "trt.ep", inputs=inputs)
     torch_tensorrt.save(trt_gm, "trt.ts", output_format="torchscript", inputs=inputs)
 
 
@@ -116,20 +119,16 @@ if __name__ == "__main__":
             "google_robot_place_apple_in_closed_top_drawer",
         ],
     )
-    parser.add_argument(
-        "--checkpoint_path",
-        type=str,
-        default="results/fractal_gamma.pt",
-    )
-    parser.add_argument(
-        "--gpu_id",
-        type=int,
-        default=0,
-    )
+    parser.add_argument("--checkpoint_path", type=str)
+    parser.add_argument("--gpu_id", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--use_bf16", action="store_true")
     args = parser.parse_args()
+
     # check task
     if "google_robot" in args.task:
         assert "fractal" in args.checkpoint_path
     if "widowx" in args.task:
         assert "bridge" in args.checkpoint_path
-    main(parser.parse_args())
+
+    main(args)
