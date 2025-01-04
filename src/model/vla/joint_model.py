@@ -22,7 +22,7 @@ from src.model.vla.mixture import Mixture
 
 
 def forward_mixture_layers(
-    mixtures: nn.ModuleList,
+    mixtures: nn.ModuleDict,
     attention_mask: torch.Tensor,
     position_ids_all: dict[torch.LongTensor],
     embeds_all: dict[torch.FloatTensor],
@@ -128,7 +128,7 @@ def forward_mixture_layers(
 
 
 def forward_mixture_attn(
-    mixtures: nn.ModuleList,
+    mixtures: nn.ModuleDict,
     attention_mask: torch.Tensor,
     position_ids_all: dict[torch.LongTensor],
     hidden_states_all: dict[torch.FloatTensor],

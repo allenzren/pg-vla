@@ -1,7 +1,7 @@
 """
 Individual mixture in PaliGemma format
 
-Additional support for AdaLN(-Zero) and (Q)LoRA
+Additional support for adaLN(-Zero) and (Q)LoRA
 
 """
 
@@ -181,7 +181,6 @@ class MixtureAttention(nn.Module):
         )
         self.rotary_emb = GemmaRotaryEmbedding(
             self.head_dim,
-            max_position_embeddings=config.max_position_embeddings,
             base=config.rope_theta,
         )
 

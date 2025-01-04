@@ -28,7 +28,6 @@ class GemmaAttention(nn.Module):
         self.head_dim = config.head_dim
         self.num_key_value_heads = config.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
-        self.max_position_embeddings = config.max_position_embeddings
         self.rope_theta = config.rope_theta
         self.is_causal = True
 
@@ -57,7 +56,6 @@ class GemmaAttention(nn.Module):
         )
         self.rotary_emb = GemmaRotaryEmbedding(
             self.head_dim,
-            max_position_embeddings=self.max_position_embeddings,
             base=self.rope_theta,
         )
 

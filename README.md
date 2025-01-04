@@ -9,7 +9,7 @@ If you find a bug or think I may have misunderstood part of the architecture bas
 <img src="media/open-pi-zero-overview.png" alt="open-pi-zero-overview" width="70%"/>
 
 ## Installation
-Clone this repository at your directory. If running [Simpler eval](https://github.com/simpler-env/SimplerEnv) or trying out trained checkpoints, clone [fork](https://github.com/allenzren/SimplerEnv) (addded proprio support) to the same directory
+Clone this repository at your directory. If running [Simpler eval](https://github.com/simpler-env/SimplerEnv) or trying out trained checkpoints, clone [fork](https://github.com/allenzren/SimplerEnv) (added proprio support) to the same directory
 ```console
 git clone https://github.com/allenzren/SimplerEnv --recurse-submodules
 ```
@@ -108,7 +108,7 @@ Success rates in **visual matching** setting in Simpler (results in visual aggre
 
 All numbers are averaged over 10 trials on top of prepackaged variations (robot/obj locations, URDFs, rgb_overlays) of each task in Simpler (total 240-2400 trials per task --- I see significant variations with <=3 seeds). Also note that these numbers may vary significantly among different checkpoints that are both mostly converged but from different epochs --- training with mixed datasets or using EMA might help.
 
-Reason on evaluating with both bf16 and float32: While the model is trained with bf16, mixed precision, and no KV caching, during inference KV cache of VLM/Proprio is used. This leads to a distribution shift of the policy output when bf16 is used [(discussion)](https://github.com/huggingface/transformers/issues/25420#issuecomment-1775317535) compared to not using KV cache, estimated around 5e-4 to 2.5e-3 (out of the [-1, 1] normalization range) in avg L1 distance; difference is negligible when float32 is used.
+Reason on evaluating with both bf16 and float32: While the model is trained with bf16, mixed precision, and no KV caching, during inference KV cache of VLM/Proprio is used. This leads to a distribution shift of the policy output when bf16 is used [(discussion)](https://github.com/huggingface/transformers/issues/25420#issuecomment-1775317535) compared to not using KV cache, estimated around 5e-4 to 2.5e-3 (out of the [-1, 1] normalization range) in avg L1 distance; difference is negligible when float32 is used in inference.
 
 Disclaimer: Please do not associate the results here with possible results from Pi.
 

@@ -29,11 +29,10 @@ class GemmaRotaryEmbedding(nn.Module):
     https://github.com/huggingface/transformers/pull/29285
     """
 
-    def __init__(self, dim, max_position_embeddings=2048, base=10000):
+    def __init__(self, dim, base=10000):
         super().__init__()
 
         self.dim = dim  # it is set to the head_dim
-        self.max_position_embeddings = max_position_embeddings
         self.base = base
 
         # Calculate the theta according to the formula theta_i = base^(2i/dim) where i = 0, 1, 2, ..., dim // 2
